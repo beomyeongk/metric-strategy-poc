@@ -3,7 +3,7 @@
 ## Overview
 
 A Rust POC that compares three SQLite storage strategies for multi-metric time-series data.  
-Each strategy stores **10,000 rows × 20 metrics** into a separate `.db` file.
+Each strategy stores **86,400 rows × 20 metrics** into a separate `.db` file (30 days of data at 30s intervals).
 
 ---
 
@@ -26,7 +26,7 @@ Keys are full metric name strings.
 | `metric` | `timestamp INTEGER`, `name_id INTEGER`, `value INTEGER` |
 
 Metric names are interned into `name_map` (id 10–29).  
-Each timestamp generates **20 separate rows** → **200,000 total rows** in `metric`.
+Each timestamp generates **20 separate rows** → **1,728,000 total rows** in `metric`.
 
 ### C — Binary BLOB + `schema_map`
 
@@ -44,9 +44,9 @@ Each row stores 20 × `u16` as a **40-byte little-endian raw BLOB**.
 
 | Strategy | File | Size (bytes) | Size (KB) | Ratio vs C |
 |---|---|---:|---:|---:|
-| A — JSONB | `a.db` | 3,432,448 | ~3,352 KB | 6.1× |
-| B — 1NF | `b.db` | 3,420,160 | ~3,340 KB | 6.1× |
-| **C — Binary** | **`c.db`** | **561,152** | **~548 KB** | **1×** |
+| A — JSONB | `a.db` | 29,573,120 | ~28,880 KB | 6.2× |
+| B — 1NF | `b.db` | 29,560,832 | ~28,868 KB | 6.2× |
+| **C — Binary** | **`c.db`** | **4,796,416** | **~4,684 KB** | **1×** |
 
 > Environment: SQLite (bundled via rusqlite 0.31), WAL mode, no compression, debug build.
 

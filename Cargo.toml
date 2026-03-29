@@ -3,8 +3,17 @@ name = "metric-strategy-poc"
 version = "0.1.0"
 edition = "2024"
 
+[[bin]]
+name = "strategy"
+path = "src/main.rs"
+
+[[bin]]
+name = "server"
+path = "src/server_main.rs"
+
 [dependencies]
 rusqlite = { version = "0.31", features = ["bundled"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 rand = "0.8"
+tiny_http = "0.12"

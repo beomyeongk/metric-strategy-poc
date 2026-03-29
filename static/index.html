@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="ko">
+
+<head>
+  <meta charset="UTF-8">
+  <title>Metric Fetch Test</title>
+</head>
+
+<body>
+  <h1>Metric Fetch Test</h1>
+  <button id="btn">Run API calls</button>
+  <div id="results"></div>
+  <script>
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+    // ── /api/a1 ─────────────────────────────────────────────────────────────
+    // Response: [{"key1": val, ...}, {...}, ...]
+    // Normalise to: { "key1": [vals], "key2": [vals], ... }
+    async function fetchA1() {
+      const f0 = performance.now();                     // ← fetch start
+      const res = await fetch('/api/a1');
+      const raw = await res.arrayBuffer();              // body fully received
+      const fetchTime = performance.now() - f0;         // ← fetch stop
+      const t0 = performance.now();                     // ← parse start
+      const arr = JSON.parse(new TextDecoder().decode(raw));
+      const a1Data = {};
+      for (const obj of arr) {
+        for (const [k, v] of Object.entries(obj)) {
+          if (!a1Data[k]) a1Data[k] = [];
+          a1Data[k].push(v);
+        }
+      }
+      return { fetchTime, parseTime: performance.now() - t0 };
+    }
+
+    // ── /api/a2 ─────────────────────────────────────────────────────────────
+    // Response: {"header": ["key1", ...], "values": [[v1, v2, ...], [...]]}
+    // Normalise to: { "key1": [vals], "key2": [vals], ... }
+    async function fetchA2() {
+      const f0 = performance.now();                     // ← fetch start
+      const res = await fetch('/api/a2');
+      const raw = await res.arrayBuffer();              // body fully received
+      const fetchTime = performance.now() - f0;         // ← fetch stop
+      const t0 = performance.now();                     // ← parse start
+      const data = JSON.parse(new TextDecoder().decode(raw));
+      const a2Data = {};
+      for (const key of data.header) a2Data[key] = [];
+      for (const row of data.values) {
+        for (let i = 0; i < data.header.length; i++) {
+          a2Data[data.header[i]].push(row[i]);
+        }
+      }
+      return { fetchTime, parseTime: performance.now() - t0 };
+    }
+
+    // ── /api/a3 ─────────────────────────────────────────────────────────────
+    // Response: multipart
+    //   Part 1 JSON: [{"bytes":2,"name":"key","type":"int"}, ...]
+    //   Part 2 binary: all values packed as u16 little-endian
+    // Normalise to: { "key1": [vals], "key2": [vals], ... }
+    async function fetchA3() {
+      const f0 = performance.now();                     // ← fetch start
+      const res = await fetch('/api/a3');
+      const boundary = res.headers.get('Content-Type').split('boundary=')[1];
+      const raw = await res.arrayBuffer();              // body fully received
+      const fetchTime = performance.now() - f0;         // ← fetch stop
+      const t0 = performance.now();                     // ← parse start
+
+      const bytes = new Uint8Array(raw);
+      const enc = new TextEncoder();
+      const dec = new TextDecoder();
+
+      function indexOfBytes(haystack, needle, start) {
+        outer: for (let i = start; i <= haystack.length - needle.length; i++) {
+          for (let j = 0; j < needle.length; j++) {
+            if (haystack[i + j] !== needle[j]) continue outer;
+          }
+          return i;
+        }
+        return -1;
+      }
+
+      const crlfcrlf = enc.encode('\r\n\r\n');
+      const firstBound = enc.encode('--' + boundary + '\r\n');
+      const nextBound = enc.encode('\r\n--' + boundary);
+      const finalBound = enc.encode('\r\n--' + boundary + '--');
+
+      // Part 1: JSON schema
+      let pos = firstBound.length;
+      let bodyStart = indexOfBytes(bytes, crlfcrlf, pos) + 4;
+      let bodyEnd = indexOfBytes(bytes, nextBound, bodyStart);
+      const schema = JSON.parse(dec.decode(bytes.slice(bodyStart, bodyEnd)));
+      const keys = schema.map(s => s.name);
+      const nFields = keys.length;
+
+      // Part 2: raw binary (skip the \r\n after boundary marker)
+      pos = bodyEnd + nextBound.length + 2;
+      bodyStart = indexOfBytes(bytes, crlfcrlf, pos) + 4;
+      bodyEnd = indexOfBytes(bytes, finalBound, bodyStart);
+
+      const binView = new DataView(raw, bodyStart, bodyEnd - bodyStart);
+      const nRows = (bodyEnd - bodyStart) / (nFields * 2);
+
+      const a3Data = {};
+      for (const key of keys) a3Data[key] = new Array(nRows);
+      for (let r = 0; r < nRows; r++) {
+        for (let f = 0; f < nFields; f++) {
+          a3Data[keys[f]][r] = binView.getUint16((r * nFields + f) * 2, true); // LE
+        }
+      }
+      return { fetchTime, parseTime: performance.now() - t0 };
+    }
+
+    // ── /api/b1 ─────────────────────────────────────────────────────────────
+    // Response: [{"key1": val, ...}, {...}, ...]
+    // Normalise to: { "key1": [vals], "key2": [vals], ... }
+    async function fetchB1() {
+      const f0 = performance.now();                     // ← fetch start
+      const res = await fetch('/api/b1');
+      const raw = await res.arrayBuffer();              // body fully received
+      const fetchTime = performance.now() - f0;         // ← fetch stop
+      const t0 = performance.now();                     // ← parse start
+      const arr = JSON.parse(new TextDecoder().decode(raw));
+      const b1Data = {};
+      for (const obj of arr) {
+        for (const [k, v] of Object.entries(obj)) {
+          if (!b1Data[k]) b1Data[k] = [];
+          b1Data[k].push(v);
+        }
+      }
+      return { fetchTime, parseTime: performance.now() - t0 };
+    }
+
+    // ── /api/b2 ─────────────────────────────────────────────────────────────
+    // Response: {"header": ["key1", ...], "values": [[v1, v2, ...], [...]]}
+    // Normalise to: { "key1": [vals], "key2": [vals], ... }
+    async function fetchB2() {
+      const f0 = performance.now();                     // ← fetch start
+      const res = await fetch('/api/b2');
+      const raw = await res.arrayBuffer();              // body fully received
+      const fetchTime = performance.now() - f0;         // ← fetch stop
+      const t0 = performance.now();                     // ← parse start
+      const data = JSON.parse(new TextDecoder().decode(raw));
+      const b2Data = {};
+      for (const key of data.header) b2Data[key] = [];
+      for (const row of data.values) {
+        for (let i = 0; i < data.header.length; i++) {
+          b2Data[data.header[i]].push(row[i]);
+        }
+      }
+      return { fetchTime, parseTime: performance.now() - t0 };
+    }
+
+    // ── /api/b3 ─────────────────────────────────────────────────────────────
+    // Response: multipart (same structure as /api/a3)
+    // Normalise to: { "key1": [vals], "key2": [vals], ... }
+    async function fetchB3() {
+      const f0 = performance.now();                     // ← fetch start
+      const res = await fetch('/api/b3');
+      const boundary = res.headers.get('Content-Type').split('boundary=')[1];
+      const raw = await res.arrayBuffer();              // body fully received
+      const fetchTime = performance.now() - f0;         // ← fetch stop
+      const t0 = performance.now();                     // ← parse start
+
+      const bytes = new Uint8Array(raw);
+      const enc = new TextEncoder();
+      const dec = new TextDecoder();
+
+      function indexOfBytes(haystack, needle, start) {
+        outer: for (let i = start; i <= haystack.length - needle.length; i++) {
+          for (let j = 0; j < needle.length; j++) {
+            if (haystack[i + j] !== needle[j]) continue outer;
+          }
+          return i;
+        }
+        return -1;
+      }
+
+      const crlfcrlf = enc.encode('\r\n\r\n');
+      const firstBound = enc.encode('--' + boundary + '\r\n');
+      const nextBound = enc.encode('\r\n--' + boundary);
+      const finalBound = enc.encode('\r\n--' + boundary + '--');
+
+      // Part 1: JSON schema
+      let pos = firstBound.length;
+      let bodyStart = indexOfBytes(bytes, crlfcrlf, pos) + 4;
+      let bodyEnd = indexOfBytes(bytes, nextBound, bodyStart);
+      const schema = JSON.parse(dec.decode(bytes.slice(bodyStart, bodyEnd)));
+      const keys = schema.map(s => s.name);
+      const nFields = keys.length;
+
+      // Part 2: raw binary
+      pos = bodyEnd + nextBound.length + 2;
+      bodyStart = indexOfBytes(bytes, crlfcrlf, pos) + 4;
+      bodyEnd = indexOfBytes(bytes, finalBound, bodyStart);
+
+      const binView = new DataView(raw, bodyStart, bodyEnd - bodyStart);
+      const nRows = (bodyEnd - bodyStart) / (nFields * 2);
+
+      const b3Data = {};
+      for (const key of keys) b3Data[key] = new Array(nRows);
+      for (let r = 0; r < nRows; r++) {
+        for (let f = 0; f < nFields; f++) {
+          b3Data[keys[f]][r] = binView.getUint16((r * nFields + f) * 2, true); // LE
+        }
+      }
+      return { fetchTime, parseTime: performance.now() - t0 };
+    }
+
+    // ── /api/c1 ─────────────────────────────────────────────────────────────
+    // Response: [{"key1": val, ...}, {...}, ...]  (BLOB decoded server-side to JSON)
+    // Normalise to: { "key1": [vals], "key2": [vals], ... }
+    async function fetchC1() {
+      const f0 = performance.now();                     // ← fetch start
+      const res = await fetch('/api/c1');
+      const raw = await res.arrayBuffer();              // body fully received
+      const fetchTime = performance.now() - f0;         // ← fetch stop
+      const t0 = performance.now();                     // ← parse start
+      const arr = JSON.parse(new TextDecoder().decode(raw));
+      const c1Data = {};
+      for (const obj of arr) {
+        for (const [k, v] of Object.entries(obj)) {
+          if (!c1Data[k]) c1Data[k] = [];
+          c1Data[k].push(v);
+        }
+      }
+      return { fetchTime, parseTime: performance.now() - t0 };
+    }
+
+    // ── /api/c2 ─────────────────────────────────────────────────────────────
+    // Response: {"header": ["key1", ...], "values": [[v1, v2, ...], [...]]}
+    // Normalise to: { "key1": [vals], "key2": [vals], ... }
+    async function fetchC2() {
+      const f0 = performance.now();                     // ← fetch start
+      const res = await fetch('/api/c2');
+      const raw = await res.arrayBuffer();              // body fully received
+      const fetchTime = performance.now() - f0;         // ← fetch stop
+      const t0 = performance.now();                     // ← parse start
+      const data = JSON.parse(new TextDecoder().decode(raw));
+      const c2Data = {};
+      for (const key of data.header) c2Data[key] = [];
+      for (const row of data.values) {
+        for (let i = 0; i < data.header.length; i++) {
+          c2Data[data.header[i]].push(row[i]);
+        }
+      }
+      return { fetchTime, parseTime: performance.now() - t0 };
+    }
+
+    // ── /api/c3 ─────────────────────────────────────────────────────────────
+    // Response: multipart (same structure as /api/a3 and /api/b3)
+    // Normalise to: { "key1": [vals], "key2": [vals], ... }
+    async function fetchC3() {
+      const f0 = performance.now();                     // ← fetch start
+      const res = await fetch('/api/c3');
+      const boundary = res.headers.get('Content-Type').split('boundary=')[1];
+      const raw = await res.arrayBuffer();              // body fully received
+      const fetchTime = performance.now() - f0;         // ← fetch stop
+      const t0 = performance.now();                     // ← parse start
+
+      const bytes = new Uint8Array(raw);
+      const enc = new TextEncoder();
+      const dec = new TextDecoder();
+
+      function indexOfBytes(haystack, needle, start) {
+        outer: for (let i = start; i <= haystack.length - needle.length; i++) {
+          for (let j = 0; j < needle.length; j++) {
+            if (haystack[i + j] !== needle[j]) continue outer;
+          }
+          return i;
+        }
+        return -1;
+      }
+
+      const crlfcrlf = enc.encode('\r\n\r\n');
+      const firstBound = enc.encode('--' + boundary + '\r\n');
+      const nextBound = enc.encode('\r\n--' + boundary);
+      const finalBound = enc.encode('\r\n--' + boundary + '--');
+
+      // Part 1: JSON schema
+      let pos = firstBound.length;
+      let bodyStart = indexOfBytes(bytes, crlfcrlf, pos) + 4;
+      let bodyEnd = indexOfBytes(bytes, nextBound, bodyStart);
+      const schema = JSON.parse(dec.decode(bytes.slice(bodyStart, bodyEnd)));
+      const keys = schema.map(s => s.name);
+      const nFields = keys.length;
+
+      // Part 2: raw binary
+      pos = bodyEnd + nextBound.length + 2;
+      bodyStart = indexOfBytes(bytes, crlfcrlf, pos) + 4;
+      bodyEnd = indexOfBytes(bytes, finalBound, bodyStart);
+
+      const binView = new DataView(raw, bodyStart, bodyEnd - bodyStart);
+      const nRows = (bodyEnd - bodyStart) / (nFields * 2);
+
+      const c3Data = {};
+      for (const key of keys) c3Data[key] = new Array(nRows);
+      for (let r = 0; r < nRows; r++) {
+        for (let f = 0; f < nFields; f++) {
+          c3Data[keys[f]][r] = binView.getUint16((r * nFields + f) * 2, true); // LE
+        }
+      }
+      return { fetchTime, parseTime: performance.now() - t0 };
+    }
+
+    document.getElementById('btn').addEventListener('click', async () => {
+      const out = document.getElementById('results');
+      out.textContent = 'Warming up...';
+
+      // ── Step 1: Warmup – 1 req each, discard ────────────────────────
+      await fetchA1();
+      await fetchA2();
+      await fetchA3();
+      await fetchB1();
+      await fetchB2();
+      await fetchB3();
+      await fetchC1();
+      await fetchC2();
+      await fetchC3();
+
+      // ── Step 2: Wait 1 s ────────────────────────────────────────────
+      await sleep(1000);
+
+      // ── Step 3: /api/a1 × 10 ────────────────────────────────────────
+      out.textContent = 'Benchmarking /api/a1...';
+      const timesA1 = [], fetchTimesA1 = [];
+      for (let i = 0; i < 10; i++) { const r = await fetchA1(); timesA1.push(r.parseTime); fetchTimesA1.push(r.fetchTime); }
+      const avgA1 = timesA1.reduce((a, b) => a + b, 0) / timesA1.length;
+      const avgFetchA1 = fetchTimesA1.reduce((a, b) => a + b, 0) / fetchTimesA1.length;
+
+      await sleep(1000);
+
+      // ── Step 4: /api/a2 × 10 ────────────────────────────────────────
+      out.textContent = 'Benchmarking /api/a2...';
+      const timesA2 = [], fetchTimesA2 = [];
+      for (let i = 0; i < 10; i++) { const r = await fetchA2(); timesA2.push(r.parseTime); fetchTimesA2.push(r.fetchTime); }
+      const avgA2 = timesA2.reduce((a, b) => a + b, 0) / timesA2.length;
+      const avgFetchA2 = fetchTimesA2.reduce((a, b) => a + b, 0) / fetchTimesA2.length;
+
+      await sleep(1000);
+
+      // ── Step 5: /api/a3 × 10 ────────────────────────────────────────
+      out.textContent = 'Benchmarking /api/a3...';
+      const timesA3 = [], fetchTimesA3 = [];
+      for (let i = 0; i < 10; i++) { const r = await fetchA3(); timesA3.push(r.parseTime); fetchTimesA3.push(r.fetchTime); }
+      const avgA3 = timesA3.reduce((a, b) => a + b, 0) / timesA3.length;
+      const avgFetchA3 = fetchTimesA3.reduce((a, b) => a + b, 0) / fetchTimesA3.length;
+
+      await sleep(1000);
+
+      // ── Step 6: /api/b1 × 10 ────────────────────────────────────────
+      out.textContent = 'Benchmarking /api/b1...';
+      const timesB1 = [], fetchTimesB1 = [];
+      for (let i = 0; i < 10; i++) { const r = await fetchB1(); timesB1.push(r.parseTime); fetchTimesB1.push(r.fetchTime); }
+      const avgB1 = timesB1.reduce((a, b) => a + b, 0) / timesB1.length;
+      const avgFetchB1 = fetchTimesB1.reduce((a, b) => a + b, 0) / fetchTimesB1.length;
+
+      await sleep(1000);
+
+      // ── Step 7: /api/b2 × 10 ────────────────────────────────────────
+      out.textContent = 'Benchmarking /api/b2...';
+      const timesB2 = [], fetchTimesB2 = [];
+      for (let i = 0; i < 10; i++) { const r = await fetchB2(); timesB2.push(r.parseTime); fetchTimesB2.push(r.fetchTime); }
+      const avgB2 = timesB2.reduce((a, b) => a + b, 0) / timesB2.length;
+      const avgFetchB2 = fetchTimesB2.reduce((a, b) => a + b, 0) / fetchTimesB2.length;
+
+      await sleep(1000);
+
+      // ── Step 8: /api/b3 × 10 ────────────────────────────────────────
+      out.textContent = 'Benchmarking /api/b3...';
+      const timesB3 = [], fetchTimesB3 = [];
+      for (let i = 0; i < 10; i++) { const r = await fetchB3(); timesB3.push(r.parseTime); fetchTimesB3.push(r.fetchTime); }
+      const avgB3 = timesB3.reduce((a, b) => a + b, 0) / timesB3.length;
+      const avgFetchB3 = fetchTimesB3.reduce((a, b) => a + b, 0) / fetchTimesB3.length;
+
+      await sleep(1000);
+
+      // ── Step 9: /api/c1 × 10 ────────────────────────────────────────
+      out.textContent = 'Benchmarking /api/c1...';
+      const timesC1 = [], fetchTimesC1 = [];
+      for (let i = 0; i < 10; i++) { const r = await fetchC1(); timesC1.push(r.parseTime); fetchTimesC1.push(r.fetchTime); }
+      const avgC1 = timesC1.reduce((a, b) => a + b, 0) / timesC1.length;
+      const avgFetchC1 = fetchTimesC1.reduce((a, b) => a + b, 0) / fetchTimesC1.length;
+
+      await sleep(1000);
+
+      // ── Step 10: /api/c2 × 10 ───────────────────────────────────────
+      out.textContent = 'Benchmarking /api/c2...';
+      const timesC2 = [], fetchTimesC2 = [];
+      for (let i = 0; i < 10; i++) { const r = await fetchC2(); timesC2.push(r.parseTime); fetchTimesC2.push(r.fetchTime); }
+      const avgC2 = timesC2.reduce((a, b) => a + b, 0) / timesC2.length;
+      const avgFetchC2 = fetchTimesC2.reduce((a, b) => a + b, 0) / fetchTimesC2.length;
+
+      await sleep(1000);
+
+      // ── Step 11: /api/c3 × 10 ───────────────────────────────────────
+      out.textContent = 'Benchmarking /api/c3...';
+      const timesC3 = [], fetchTimesC3 = [];
+      for (let i = 0; i < 10; i++) { const r = await fetchC3(); timesC3.push(r.parseTime); fetchTimesC3.push(r.fetchTime); }
+      const avgC3 = timesC3.reduce((a, b) => a + b, 0) / timesC3.length;
+      const avgFetchC3 = fetchTimesC3.reduce((a, b) => a + b, 0) / fetchTimesC3.length;
+
+      // ── Step 12: Display results ─────────────────────────────────────
+      const fmt = (avg, times) =>
+        `${Math.round(avg)} ms (${times.map(t => Math.round(t)).join(' ')})`;
+      out.innerHTML =
+        `<p>/api/a1  avg fetch time (10 runs): ${fmt(avgFetchA1, fetchTimesA1)}</p>` +
+        `<p>/api/a1  avg parse time (10 runs): ${fmt(avgA1, timesA1)}</p>` +
+        `<p>/api/a2  avg fetch time (10 runs): ${fmt(avgFetchA2, fetchTimesA2)}</p>` +
+        `<p>/api/a2  avg parse time (10 runs): ${fmt(avgA2, timesA2)}</p>` +
+        `<p>/api/a3  avg fetch time (10 runs): ${fmt(avgFetchA3, fetchTimesA3)}</p>` +
+        `<p>/api/a3  avg parse time (10 runs): ${fmt(avgA3, timesA3)}</p>` +
+        `<p>/api/b1  avg fetch time (10 runs): ${fmt(avgFetchB1, fetchTimesB1)}</p>` +
+        `<p>/api/b1  avg parse time (10 runs): ${fmt(avgB1, timesB1)}</p>` +
+        `<p>/api/b2  avg fetch time (10 runs): ${fmt(avgFetchB2, fetchTimesB2)}</p>` +
+        `<p>/api/b2  avg parse time (10 runs): ${fmt(avgB2, timesB2)}</p>` +
+        `<p>/api/b3  avg fetch time (10 runs): ${fmt(avgFetchB3, fetchTimesB3)}</p>` +
+        `<p>/api/b3  avg parse time (10 runs): ${fmt(avgB3, timesB3)}</p>` +
+        `<p>/api/c1  avg fetch time (10 runs): ${fmt(avgFetchC1, fetchTimesC1)}</p>` +
+        `<p>/api/c1  avg parse time (10 runs): ${fmt(avgC1, timesC1)}</p>` +
+        `<p>/api/c2  avg fetch time (10 runs): ${fmt(avgFetchC2, fetchTimesC2)}</p>` +
+        `<p>/api/c2  avg parse time (10 runs): ${fmt(avgC2, timesC2)}</p>` +
+        `<p>/api/c3  avg fetch time (10 runs): ${fmt(avgFetchC3, fetchTimesC3)}</p>` +
+        `<p>/api/c3  avg parse time (10 runs): ${fmt(avgC3, timesC3)}</p>`;
+    });
+  </script>
+</body>
+
+</html>
