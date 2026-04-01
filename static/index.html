@@ -70,10 +70,10 @@
       const enc = new TextEncoder();
       const dec = new TextDecoder();
 
-      function indexOfBytes(haystack, needle, start) {
-        outer: for (let i = start; i <= haystack.length - needle.length; i++) {
-          for (let j = 0; j < needle.length; j++) {
-            if (haystack[i + j] !== needle[j]) continue outer;
+      function indexOfBytes(rawbytes, target, start) {
+        outer: for (let i = start; i <= rawbytes.length - target.length; i++) {
+          for (let j = 0; j < target.length; j++) {
+            if (rawbytes[i + j] !== target[j]) continue outer;
           }
           return i;
         }
@@ -166,10 +166,10 @@
       const enc = new TextEncoder();
       const dec = new TextDecoder();
 
-      function indexOfBytes(haystack, needle, start) {
-        outer: for (let i = start; i <= haystack.length - needle.length; i++) {
-          for (let j = 0; j < needle.length; j++) {
-            if (haystack[i + j] !== needle[j]) continue outer;
+      function indexOfBytes(rawbytes, target, start) {
+        outer: for (let i = start; i <= rawbytes.length - target.length; i++) {
+          for (let j = 0; j < target.length; j++) {
+            if (rawbytes[i + j] !== target[j]) continue outer;
           }
           return i;
         }
@@ -262,10 +262,10 @@
       const enc = new TextEncoder();
       const dec = new TextDecoder();
 
-      function indexOfBytes(haystack, needle, start) {
-        outer: for (let i = start; i <= haystack.length - needle.length; i++) {
-          for (let j = 0; j < needle.length; j++) {
-            if (haystack[i + j] !== needle[j]) continue outer;
+      function indexOfBytes(rawbytes, target, start) {
+        outer: for (let i = start; i <= rawbytes.length - target.length; i++) {
+          for (let j = 0; j < target.length; j++) {
+            if (rawbytes[i + j] !== target[j]) continue outer;
           }
           return i;
         }
