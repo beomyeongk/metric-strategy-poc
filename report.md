@@ -111,9 +111,9 @@ Each storage strategy was paired with three HTTP transmission formats:
 | /c1 | Binary | Object array | 548 | 588 | 167 | 755 |
 | /c2 | Binary | Header + matrix | 243 | 279 | 49 | 328 |
 | /c3 | Binary | Schema + binary | 16 | 50 | 37 | 87 |
-| ** /d1 ** | JSONB Array | Object array | 721 | 768 | 167 | 935 |
-| ** /d2 ** | JSONB Array | Header + matrix | 112 | 149 | 49 | 198 |
-| ** /d3 ** | JSONB Array | Schema + binary | 206 | 239 | 37 | 276 |
+| /d1 | JSONB Array | Object array | 721 | 768 | 167 | 935 |
+| /d2 | JSONB Array | Header + matrix | 112 | 149 | 49 | 198 |
+| /d3 | JSONB Array | Schema + binary | 206 | 239 | 37 | 276 |
 
 ---
 
