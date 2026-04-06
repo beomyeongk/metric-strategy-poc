@@ -247,6 +247,94 @@
       return { fetchTime, parseTime: performance.now() - t0 };
     }
 
+    // ── /api/d1 ─────────────────────────────────────────────────────────────
+    async function fetchD1() {
+      const f0 = performance.now();
+      const res = await fetch('/api/d1');
+      const raw = await res.arrayBuffer();
+      const fetchTime = performance.now() - f0;
+      const t0 = performance.now();
+      const arr = JSON.parse(new TextDecoder().decode(raw));
+      const d1Data = {};
+      for (const obj of arr) {
+        for (const [k, v] of Object.entries(obj)) {
+          if (!d1Data[k]) d1Data[k] = [];
+          d1Data[k].push(v);
+        }
+      }
+      return { fetchTime, parseTime: performance.now() - t0 };
+    }
+
+    // ── /api/d2 ─────────────────────────────────────────────────────────────
+    async function fetchD2() {
+      const f0 = performance.now();
+      const res = await fetch('/api/d2');
+      const raw = await res.arrayBuffer();
+      const fetchTime = performance.now() - f0;
+      const t0 = performance.now();
+      const data = JSON.parse(new TextDecoder().decode(raw));
+      const d2Data = {};
+      for (const key of data.header) d2Data[key] = [];
+      for (const row of data.values) {
+        for (let i = 0; i < data.header.length; i++) {
+          d2Data[data.header[i]].push(row[i]);
+        }
+      }
+      return { fetchTime, parseTime: performance.now() - t0 };
+    }
+
+    // ── /api/d3 ─────────────────────────────────────────────────────────────
+    async function fetchD3() {
+      const f0 = performance.now();
+      const res = await fetch('/api/d3');
+      const boundary = res.headers.get('Content-Type').split('boundary=')[1];
+      const raw = await res.arrayBuffer();
+      const fetchTime = performance.now() - f0;
+      const t0 = performance.now();
+
+      const bytes = new Uint8Array(raw);
+      const enc = new TextEncoder();
+      const dec = new TextDecoder();
+
+      function indexOfBytes(rawbytes, target, start) {
+        outer: for (let i = start; i <= rawbytes.length - target.length; i++) {
+          for (let j = 0; j < target.length; j++) {
+            if (rawbytes[i + j] !== target[j]) continue outer;
+          }
+          return i;
+        }
+        return -1;
+      }
+
+      const crlfcrlf = enc.encode('\r\n\r\n');
+      const firstBound = enc.encode('--' + boundary + '\r\n');
+      const nextBound = enc.encode('\r\n--' + boundary);
+      const finalBound = enc.encode('\r\n--' + boundary + '--');
+
+      let pos = firstBound.length;
+      let bodyStart = indexOfBytes(bytes, crlfcrlf, pos) + 4;
+      let bodyEnd = indexOfBytes(bytes, nextBound, bodyStart);
+      const schema = JSON.parse(dec.decode(bytes.slice(bodyStart, bodyEnd)));
+      const keys = schema.map(s => s.name);
+      const nFields = keys.length;
+
+      pos = bodyEnd + nextBound.length + 2;
+      bodyStart = indexOfBytes(bytes, crlfcrlf, pos) + 4;
+      bodyEnd = indexOfBytes(bytes, finalBound, bodyStart);
+
+      const binView = new DataView(raw, bodyStart, bodyEnd - bodyStart);
+      const nRows = (bodyEnd - bodyStart) / (nFields * 2);
+
+      const d3Data = {};
+      for (const key of keys) d3Data[key] = new Array(nRows);
+      for (let r = 0; r < nRows; r++) {
+        for (let f = 0; f < nFields; f++) {
+          d3Data[keys[f]][r] = binView.getUint16((r * nFields + f) * 2, true); // LE
+        }
+      }
+      return { fetchTime, parseTime: performance.now() - t0 };
+    }
+
     // ── /api/c3 ─────────────────────────────────────────────────────────────
     // Response: multipart (same structure as /api/a3 and /api/b3)
     // Normalise to: { "key1": [vals], "key2": [vals], ... }
@@ -317,6 +405,9 @@
       await fetchC1();
       await fetchC2();
       await fetchC3();
+      await fetchD1();
+      await fetchD2();
+      await fetchD3();
 
       // ── Step 2: Wait 1 s ────────────────────────────────────────────
       await sleep(1000);
@@ -400,6 +491,33 @@
       const avgC3 = timesC3.reduce((a, b) => a + b, 0) / timesC3.length;
       const avgFetchC3 = fetchTimesC3.reduce((a, b) => a + b, 0) / fetchTimesC3.length;
 
+      await sleep(1000);
+
+      // ── Step 11.1: /api/d1 × 10 ─────────────────────────────────────
+      out.textContent = 'Benchmarking /api/d1...';
+      const timesD1 = [], fetchTimesD1 = [];
+      for (let i = 0; i < 10; i++) { const r = await fetchD1(); timesD1.push(r.parseTime); fetchTimesD1.push(r.fetchTime); }
+      const avgD1 = timesD1.reduce((a, b) => a + b, 0) / timesD1.length;
+      const avgFetchD1 = fetchTimesD1.reduce((a, b) => a + b, 0) / fetchTimesD1.length;
+
+      await sleep(1000);
+
+      // ── Step 11.2: /api/d2 × 10 ─────────────────────────────────────
+      out.textContent = 'Benchmarking /api/d2...';
+      const timesD2 = [], fetchTimesD2 = [];
+      for (let i = 0; i < 10; i++) { const r = await fetchD2(); timesD2.push(r.parseTime); fetchTimesD2.push(r.fetchTime); }
+      const avgD2 = timesD2.reduce((a, b) => a + b, 0) / timesD2.length;
+      const avgFetchD2 = fetchTimesD2.reduce((a, b) => a + b, 0) / fetchTimesD2.length;
+
+      await sleep(1000);
+
+      // ── Step 11.3: /api/d3 × 10 ─────────────────────────────────────
+      out.textContent = 'Benchmarking /api/d3...';
+      const timesD3 = [], fetchTimesD3 = [];
+      for (let i = 0; i < 10; i++) { const r = await fetchD3(); timesD3.push(r.parseTime); fetchTimesD3.push(r.fetchTime); }
+      const avgD3 = timesD3.reduce((a, b) => a + b, 0) / timesD3.length;
+      const avgFetchD3 = fetchTimesD3.reduce((a, b) => a + b, 0) / fetchTimesD3.length;
+
       // ── Step 12: Display results ─────────────────────────────────────
       const fmt = (avg, times) =>
         `${Math.round(avg)} ms (${times.map(t => Math.round(t)).join(' ')})`;
@@ -421,7 +539,13 @@
         `<p>/api/c2  avg fetch time (10 runs): ${fmt(avgFetchC2, fetchTimesC2)}</p>` +
         `<p>/api/c2  avg parse time (10 runs): ${fmt(avgC2, timesC2)}</p>` +
         `<p>/api/c3  avg fetch time (10 runs): ${fmt(avgFetchC3, fetchTimesC3)}</p>` +
-        `<p>/api/c3  avg parse time (10 runs): ${fmt(avgC3, timesC3)}</p>`;
+        `<p>/api/c3  avg parse time (10 runs): ${fmt(avgC3, timesC3)}</p>` +
+        `<p>/api/d1  avg fetch time (10 runs): ${fmt(avgFetchD1, fetchTimesD1)}</p>` +
+        `<p>/api/d1  avg parse time (10 runs): ${fmt(avgD1, timesD1)}</p>` +
+        `<p>/api/d2  avg fetch time (10 runs): ${fmt(avgFetchD2, fetchTimesD2)}</p>` +
+        `<p>/api/d2  avg parse time (10 runs): ${fmt(avgD2, timesD2)}</p>` +
+        `<p>/api/d3  avg fetch time (10 runs): ${fmt(avgFetchD3, fetchTimesD3)}</p>` +
+        `<p>/api/d3  avg parse time (10 runs): ${fmt(avgD3, timesD3)}</p>`;
     });
   </script>
 </body>

@@ -2,7 +2,7 @@
 
 ## Overview
 
-A Rust POC that compares three SQLite storage strategies for multi-metric time-series data.  
+A Rust POC that compares four SQLite storage strategies for multi-metric time-series data.  
 Each strategy stores **86,400 rows × 20 metrics** into a separate `.db` file (30 days of data at 30s intervals).
 
 ---
@@ -38,6 +38,18 @@ Each timestamp generates **20 separate rows** → **1,728,000 total rows** in `m
 The schema is defined once as a JSON array in `schema_map`.  
 Each row stores 20 × `u16` as a **40-byte little-endian raw BLOB**.
 
+### D — JSONB Array + `header_map`
+
+| Table | Columns |
+|---|---|
+| `header_map` | `id INTEGER PK`, `headers TEXT` |
+| `metric` | `timestamp INTEGER`, `header_id INTEGER`, `data BLOB` |
+
+Header names (metric names, comma-separated) are stored once in `header_map`.  
+Each row stores 20 values as a **SQLite native JSONB array** (via `jsonb()`).  
+Unlike A, keys are omitted — only the ordered value array is stored per row.  
+Unlike C, values are stored as a JSONB number array rather than raw binary.
+
 ---
 
 ## Results
@@ -47,16 +59,21 @@ Each row stores 20 × `u16` as a **40-byte little-endian raw BLOB**.
 | A — JSONB | `a.db` | 29,573,120 | ~28,880 KB | 6.2× |
 | B — 1NF | `b.db` | 29,560,832 | ~28,868 KB | 6.2× |
 | **C — Binary** | **`c.db`** | **4,796,416** | **~4,684 KB** | **1×** |
+| D — JSONB Array | `d.db` | 11,509,760 | ~11,240 KB | 2.4× |
 
 > Environment: SQLite (bundled via rusqlite 0.31), WAL mode, no compression, debug build.
 
 ---
 
-## Analysis
+## Storage Analysis
 
 - **A vs B are nearly identical in size.** Despite B storing data in a normalised form, the overhead of 1,728,000 rows (each with timestamp + name_id + value) matches the size of A's JSON key repetition.
 - **C is ~6× smaller than A and B.** Packing values as a raw 40-byte BLOB eliminates all textual overhead: no key names, no commas, no quotes.
-- **Trade-off**: C requires the application to own schema parsing logic; A and B are self-describing and can be queried directly with standard SQL/JSON functions.
+- **D sits between C and A/B (~2.4× vs C).** By storing only a value array (no key names per row), D avoids the key-repetition overhead of A. However, JSONB encoding of numbers still adds per-value overhead (type tags, integer encoding) compared to C's fixed-width u16 LE binary.
+- **Trade-off summary:**
+  - A/B: self-describing, SQL/JSON queryable, but large
+  - C: smallest footprint, but requires application-level schema parsing
+  - D: header names stored once (like C), values as JSONB array — a middle ground between self-description and compactness
 
 ---
 
@@ -77,38 +94,41 @@ Each storage strategy was paired with three HTTP transmission formats:
 
 ---
 
+---
+
 ## HTTP Transmission Benchmark
 
 > 86,400 rows × 20 metrics, localhost, debug build, 10-run average.
 
 | API | Storage | Transmission | Server (ms) | Client Fetch (ms) | Client Parse (ms) | Client Total (ms) |
 |---|---|---|---:|---:|---:|---:|
-| /a1 | JSONB | Object array | 347 | 381 | 166 | 547 |
-| /a2 | JSONB | Header + matrix | 1,459 | 1,481 | 48 | 1,529 |
-| /a3 | JSONB | Schema + binary | 1,232 | 1,265 | 49 | 1,314 |
-| /b1 | 1NF | Object array | 1,311 | 1,344 | 168 | 1,512 |
-| /b2 | 1NF | Header + matrix | 753 | 779 | 49 | 828 |
-| /b3 | 1NF | Schema + binary | 542 | 573 | 45 | 618 |
-| /c1 | Binary | Object array | 551 | 587 | 175 | 762 |
-| /c2 | Binary | Header + matrix | 253 | 280 | 51 | 331 |
-| /c3 | Binary | Schema + binary | 23 | 50 | 37 | 87 |
+| /a1 | JSONB | Object array | 347 | 382 | 172 | 554 |
+| /a2 | JSONB | Header + matrix | 1,438 | 1,466 | 49 | 1,515 |
+| /a3 | JSONB | Schema + binary | 1,227 | 1,255 | 37 | 1,292 |
+| /b1 | 1NF | Object array | 1,307 | 1,343 | 168 | 1,511 |
+| /b2 | 1NF | Header + matrix | 747 | 775 | 50 | 825 |
+| /b3 | 1NF | Schema + binary | 540 | 566 | 38 | 604 |
+| /c1 | Binary | Object array | 548 | 588 | 167 | 755 |
+| /c2 | Binary | Header + matrix | 243 | 279 | 49 | 328 |
+| /c3 | Binary | Schema + binary | 16 | 50 | 37 | 87 |
+| ** /d1 ** | JSONB Array | Object array | 721 | 768 | 167 | 935 |
+| ** /d2 ** | JSONB Array | Header + matrix | 112 | 149 | 49 | 198 |
+| ** /d3 ** | JSONB Array | Schema + binary | 206 | 239 | 37 | 276 |
 
 ---
 
 ## Transmission Analysis
 
-- **Parse cost is format-driven, not storage-driven.** Object-array format (×1) always costs ~165–175 ms client-side regardless of storage strategy, because the parser must iterate every key of every row. Header+matrix (×2) and binary (×3) cut parse time to ~37–51 ms.
+- **Parse cost is format-driven, not storage-driven.** Object-array format (×1) always costs ~165–175 ms client-side regardless of storage strategy, because the JS engine must expensive iteration for every key of every row. Header+matrix (×2) and binary (×3) formats consistently cut parse time down to ~37–50 ms.
 
-- **Server time is storage-driven, not format-driven.** The dominant cost is the DB read shape:
-  - **A** reads a single JSONB blob per timestamp (fast DB side, but JSON serialization adds overhead).
-  - **B** reads 1,728,000 individual rows (JOIN + value scan is expensive on the server).
-  - **C** reads one 40-byte BLOB per timestamp — minimal DB work, no serialization needed.
+- **Server time is storage-driven, but D2 shows a unique advantage.** 
+  - **C3 remains the absolute leader (16ms server / 87ms total)** because it bypasses all serialization; it's a pure raw BLOB concatenation.
+  - **D2 (JSONB Array + Matrix) is a very strong runner-up (112ms server / 198ms total).** It is even faster on the server than C2 (243ms). This is because Strategy D stores data as a JSONB array; `SELECT json(data)` in SQLite is extremely fast at converting its internal binary array to a JSON text array, avoiding the manual U16-to-JSON serialization loop that C2 has to perform in Rust.
+  - **D1 is slower than A1 (721ms vs 347ms).** Even though D's storage is smaller, building an object array requires the server to "inflate" the value-only array back into key-value pairs using the `header_map`, which adds significant CPU overhead compared to A1 where those pairs are already stored.
 
-- **/c3 has an end-to-end latency of 87 ms.** The BLOB is stored pre-encoded as u16 LE, so the server concatenates raw bytes with no conversion; the client uses `DataView.getUint16()` directly on the received buffer with no JSON parsing.
+- **/a2 and /a3 are the slowest (>1,200ms).** Despite using JSONB, re-serializing an object-key-heavy binary format back into text for every row causes massive server-side latency.
 
-- **/a2 and /a3 are slow on the server (>1,200 ms)** despite JSONB storage, because SQLite's `json()` function re-serializes the internal binary representation back to text for every row — a round-trip that C avoids entirely.
-
-- **The 1NF (B) strategies are consistently mid-tier.** The JOIN overhead (`metric JOIN name_map`) adds meaningful latency even for binary output (/b3: 542 ms server vs /c3: 23 ms).
+- **Strategy C (Binary) combined with Format 3 (Multipart Binary) provides the best overall performance**, but **Strategy D with Format 2** offers an excellent balance: it's nearly as fast, much smaller than A/B, and much easier to query via SQL than C.
 
 ---
 

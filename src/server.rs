@@ -10,6 +10,7 @@ const HTML: &str = include_str!("../static/index.html");
 const DB_PATH: &str = "a.db";
 const DB_B_PATH: &str = "b.db";
 const DB_C_PATH: &str = "c.db";
+const DB_D_PATH: &str = "d.db";
 
 // ── /api/a1 ────────────────────────────────────────────────────────────────
 // Returns: [{"key1": val, "key2": val, ...}, {...}, ...]
@@ -357,6 +358,101 @@ fn build_c3(boundary: &str) -> Vec<u8> {
     body
 }
 
+// ── helpers shared by d1/d2/d3 ───────────────────────────────────────────────
+fn load_d_keys(conn: &Connection) -> Vec<String> {
+    let headers_str: String = conn
+        .query_row("SELECT headers FROM header_map WHERE id = 10", [], |r| {
+            r.get(0)
+        })
+        .expect("header_map query failed");
+    headers_str.split(',').map(|s| s.to_string()).collect()
+}
+
+// ── /api/d1 ────────────────────────────────────────────────────────────────
+fn build_d1() -> Vec<u8> {
+    let conn = Connection::open(DB_D_PATH).expect("Cannot open d.db");
+    let keys = load_d_keys(&conn);
+
+    let mut stmt = conn
+        .prepare("SELECT json(data) FROM metric ORDER BY rowid")
+        .expect("prepare failed");
+    let objects: Vec<String> = stmt
+        .query_map([], |r| r.get::<_, String>(0))
+        .expect("query failed")
+        .filter_map(|r| r.ok())
+        .map(|json_str| {
+            let arr: Vec<u16> = serde_json::from_str(&json_str).expect("parse error");
+            let pairs: Vec<String> = keys.iter().enumerate()
+                .map(|(i, key)| format!("\"{}\":{}", key, arr[i]))
+                .collect();
+            format!("{{{}}}", pairs.join(","))
+        })
+        .collect();
+
+    format!("[{}]", objects.join(",")).into_bytes()
+}
+
+// ── /api/d2 ────────────────────────────────────────────────────────────────
+fn build_d2() -> Vec<u8> {
+    let conn = Connection::open(DB_D_PATH).expect("Cannot open d.db");
+    let keys = load_d_keys(&conn);
+
+    let mut stmt = conn
+        .prepare("SELECT json(data) FROM metric ORDER BY rowid")
+        .expect("prepare failed");
+    let rows: Vec<String> = stmt
+        .query_map([], |r| r.get(0))
+        .expect("query failed")
+        .filter_map(|r| r.ok())
+        .collect();
+
+    let header_json = serde_json::to_string(&keys).unwrap();
+    format!(
+        "{{\"header\":{},\"values\":[{}]}}",
+        header_json,
+        rows.join(",")
+    )
+    .into_bytes()
+}
+
+// ── /api/d3 ────────────────────────────────────────────────────────────────
+fn build_d3(boundary: &str) -> Vec<u8> {
+    let conn = Connection::open(DB_D_PATH).expect("Cannot open d.db");
+    let keys = load_d_keys(&conn);
+
+    let mut stmt = conn
+        .prepare("SELECT json(data) FROM metric ORDER BY rowid")
+        .expect("prepare failed");
+    let mut binary: Vec<u8> = Vec::with_capacity(86_400 * 20 * 2);
+    stmt.query_map([], |r| r.get::<_, String>(0))
+        .expect("query failed")
+        .filter_map(|r| r.ok())
+        .for_each(|json_str| {
+            let arr: Vec<u16> = serde_json::from_str(&json_str).expect("parse error");
+            for v in arr {
+                binary.extend_from_slice(&v.to_le_bytes());
+            }
+        });
+
+    let schema: Vec<Value> = keys
+        .iter()
+        .map(|name| json!({"bytes": 2, "name": name, "type": "int"}))
+        .collect();
+    let schema_json = serde_json::to_string(&schema).unwrap();
+
+    let mut body: Vec<u8> = Vec::new();
+    body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+    body.extend_from_slice(b"Content-Type: application/json\r\n\r\n");
+    body.extend_from_slice(schema_json.as_bytes());
+    body.extend_from_slice(b"\r\n");
+    body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+    body.extend_from_slice(b"Content-Type: application/octet-stream\r\n\r\n");
+    body.extend_from_slice(&binary);
+    body.extend_from_slice(b"\r\n");
+    body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+    body
+}
+
 // ── Server ─────────────────────────────────────────────────────────────────
 
 pub fn run() {
@@ -481,6 +577,42 @@ pub fn run() {
                 );
                 let _ = request.respond(response);
                 print!("c3({}) ", t.elapsed().as_millis());
+                let _ = std::io::stdout().flush();
+            }
+
+            // ── /api/d1 ─────────────────────────────────────────────────
+            (Method::Get, "/api/d1") => {
+                let t = Instant::now();
+                let body = build_d1();
+                let response = Response::from_data(body)
+                    .with_header(Header::from_bytes("Content-Type", "application/json").unwrap());
+                let _ = request.respond(response);
+                print!("d1({}) ", t.elapsed().as_millis());
+                let _ = std::io::stdout().flush();
+            }
+
+            // ── /api/d2 ─────────────────────────────────────────────────
+            (Method::Get, "/api/d2") => {
+                let t = Instant::now();
+                let body = build_d2();
+                let response = Response::from_data(body)
+                    .with_header(Header::from_bytes("Content-Type", "application/json").unwrap());
+                let _ = request.respond(response);
+                print!("d2({}) ", t.elapsed().as_millis());
+                let _ = std::io::stdout().flush();
+            }
+
+            // ── /api/d3 (multipart) ──────────────────────────────────────
+            (Method::Get, "/api/d3") => {
+                let t = Instant::now();
+                let boundary = "MetricBoundary42";
+                let body = build_d3(boundary);
+                let content_type = format!("multipart/mixed; boundary={boundary}");
+                let response = Response::from_data(body).with_header(
+                    Header::from_bytes("Content-Type", content_type.as_str()).unwrap(),
+                );
+                let _ = request.respond(response);
+                print!("d3({}) ", t.elapsed().as_millis());
                 let _ = std::io::stdout().flush();
             }
 
