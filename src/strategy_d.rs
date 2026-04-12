@@ -32,7 +32,7 @@ pub fn run(rows: &[[u16; 20]], timestamps: &[i64]) -> rusqlite::Result<()> {
         params![10i32, headers_str],
     )?;
 
-    // Insert metric rows: values stored as JSONB array [v0, v1, ..., v19]
+    // Insert metric  rows: values stored as JSONB array [v0, v1, ..., v19]
     let tx = conn.unchecked_transaction()?;
     {
         let mut ins_metric = tx.prepare(

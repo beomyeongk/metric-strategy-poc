@@ -2,7 +2,7 @@
 
 ## Overview
 
-A Rust POC that compares four SQLite storage strategies for multi-metric time-series data.  
+A POC that compares four SQLite storage strategies for multi-metric time-series data.  
 Each strategy stores **86,400 rows × 20 metrics** into a separate `.db` file (30 days of data at 30s intervals).
 
 ---
@@ -114,6 +114,35 @@ Each storage strategy was paired with three HTTP transmission formats:
 | /d1 | JSONB Array | Object array | 721 | 768 | 167 | 935 |
 | /d2 | JSONB Array | Header + matrix | 112 | 149 | 49 | 198 |
 | /d3 | JSONB Array | Schema + binary | 206 | 239 | 37 | 276 |
+
+---
+
+## Low-end Device Transmission Benchmark
+
+> 86,400 rows × 20 metrics, tested on a low-end device, 10-run average.
+
+| API | Storage | Transmission | Server (ms) | Client Fetch (ms) | Client Parse (ms) | Client Total (ms) |
+|---|---|---|---:|---:|---:|---:|
+| /a1 | JSONB | Object array | 4,143 | 4,286 | 154 | 4,440 |
+| /a2 | JSONB | Header + matrix | 12,655 | 12,952 | 80 | 13,032 |
+| /a3 | JSONB | Schema + binary | 10,353 | 10,949 | 45 | 10,994 |
+| /b1 | 1NF | Object array | 14,225 | 14,520 | 200 | 14,720 |
+| /b2 | 1NF | Header + matrix | 8,005 | 8,329 | 74 | 8,403 |
+| /b3 | 1NF | Schema + binary | 6,023 | 6,245 | 63 | 6,308 |
+| /c1 | Binary | Object array | 5,985 | 6,120 | 184 | 6,304 |
+| /c2 | Binary | Header + matrix | 3,631 | 3,817 | 66 | 3,883 |
+| /c3 | Binary | Schema + binary | 464 | 588 | 41 | 629 |
+| /d1 | JSONB Array | Object array | 7,813 | 7,973 | 179 | 8,152 |
+| /d2 | JSONB Array | Header + matrix | 2,287 | 2,410 | 62 | 2,472 |
+| /d3 | JSONB Array | Schema + binary | 2,860 | 2,981 | 50 | 3,031 |
+
+### Low-end Device Analysis
+
+- Overall times are dramatically higher across the board compared to the high-performance local environment, highlighting the strong impact of CPU limit on serialization logic.
+- **Parse overhead trend is preserved:** Object arrays (`/1`) take ~150-200ms to parse in JS, whereas matrix/binary formats only take ~40-80ms. The parsing efficiency advantage for matrix/binary is similarly evident on lower-spec hardware.
+- **Heavy serialization is a major bottleneck:** Constructing object arrays like `/b1` (~14s) or re-serializing JSONB to text like `/a2` and `/a3` (>10s) causes severe performance degradation on low-end CPUs.
+- **`/c3` (Pure Binary) shines the brightest:** With under 500ms server time, the strategy of entirely bypassing JSON serialization and raw blob copying is especially potent on under-powered devices.
+- **`/d2` (JSONB Array + Matrix) is a massive winner for JSON-based endpoints:** At ~2.3 seconds server time, it capitalizes on SQLite's fast internal native JSON conversion, avoiding Rust-level iteration entirely. Even on low-spec hardware, D2 easily outpaces its closest JSON competitor (`/c2`).
 
 ---
 
